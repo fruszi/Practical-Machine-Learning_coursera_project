@@ -1,0 +1,146 @@
+---
+title: "Practical Machine Learning - Prediction Assignment Writeup"
+author: "fruzsi"
+date: "23 February 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Backround and goals
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+#### Data source: http://groupware.les.inf.puc-rio.br/har
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. "Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)". Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+*This project is part of an assignment for Practical Machine Learning, Data Science specialisation, Coursera.* 
+
+## Environment and parameter settings
+libraries and seed for (pseudo)randomizations (this latter is to ensure reproducibiliy of the models)
+```{r lib, message=FALSE, warning=FALSE}
+library(plyr)         # has to be loaded before dplyr
+library(dplyr)
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+set.seed(35)
+```
+data source
+```{r}
+train.source <- 
+    "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test.source  <- 
+    "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+```
+
+## Data acquisition and preparation
+Download data sets and have a look at dimensions
+```{r}
+train <- read.csv(url(train.source))
+testing  <- read.csv(url(test.source))
+# look at data dimensions and factor names
+dim(train)
+names(train)
+```
+The first few variables' names suggest that they are volunteer IDs and timestamps. These (ideally) should not have an impact on classifying their activities so we are going to delete them from the data
+```{r}
+# remove ID and timestamp variables
+train <- train[,-(1:5)]
+```
+Next step is to create a training and testing partition in our test data. We will train our models with the train partition and use the test partition to evaluate the models. Then, the best performing model (measured by accuracy in this case) will be used to predict the new items provided in the testing dataset.
+```{r}
+# create a train/ test set within the training data
+trainslpit  <- createDataPartition(train$classe, p=0.7, list=FALSE)
+train.train <- train[trainslpit, ]
+train.test  <- train[-trainslpit, ]
+```
+Clean data: 
+*a) remove variables with too much missing data (95% < NAs) and 
+*b) remove variables with too low variance - these won't add much into explaining the variability in the outcome variable
+```{r}
+# a) remove variables where majority of values are missing (95%)
+misses   <- sapply(train.train, function(x) mean(is.na(x))) > 0.95
+train.train <- train.train[, misses==F]
+train.test  <- train.test[, misses==F]
+dim(train.train)
+```
+```{r}
+# remove variables with Nearly Zero Variance (NZV)
+nzv <- nearZeroVar(train.train)
+train.train <- train.train[, -nzv]
+train.test  <- train.test[, -nzv]
+dim(train.train)
+```
+
+
+# Model building
+
+We will create two models - 1) Random forest, 2) Generalised Boosting Model. (These are the 'favourite' types in use)
+
+## 1) Random Forest Model
+Training with cross-validation
+```{r rf}
+# crossvalidation set
+cvset <- trainControl(method="cv", number=5, verboseIter=F)
+# model fit
+rfmodel <- train(classe ~ ., data=train.train, method="rf",
+                 trControl=cvset)
+# the model
+rfmodel$finalModel
+```
+Now we will carry out the testing of the model on the test data partition. Calculate confusion matrix, accuracy, and out-of-sample error, that is the 1-accuracy. Out-of-sample error is the error in the prediction using the model on data that is not the training data the model was originally used to build.
+```{r}
+# prediction on test set, and evaluation (accuracy)
+rfpredict <- predict(rfmodel, newdata=train.test)
+confmatrix <- confusionMatrix(rfpredict, train.test$classe)
+# accuracy
+print(paste('accuracy:',as.character(confmatrix$overall['Accuracy'])))
+# plot confusion matrix
+plot(confmatrix$table, col = confmatrix$byClass, 
+     main = paste("RF model accuracy =",
+                  round(confmatrix$overall['Accuracy'], 4)))
+# error (out-of-sample)
+print(paste('out of sample error:',as.character(1-confmatrix$overall['Accuracy'])))
+```
+
+## 2) Generalised Boost Model
+Training with cross-validation
+```{r gbm,  message=FALSE, warning=FALSE}
+# crossvalidation set
+cvset <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+# model fit
+gbmmodel  <- train(classe ~ ., data=train.train, method = "gbm",
+                    trControl = cvset, verbose = F)
+# 'le model 
+gbmmodel$finalModel
+```
+As above, we will carry out the testing of this GBM on the test data partition.
+```{r}
+# prediction on test set, and evaluation (accuracy, and out of sample error)
+gbmpredict <- predict(gbmmodel, newdata=train.test)
+confmatrix <- confusionMatrix(gbmpredict, train.test$classe)
+# accuracy
+print(paste('accuracy:',as.character(confmatrix$overall['Accuracy'])))
+# plot confusion matrix
+plot(confmatrix$table, col = confmatrix$byClass, 
+     main = paste("GBM model accuracy =",
+                  round(confmatrix$overall['Accuracy'], 4)))
+# error (out-of-sample)
+print(paste('out of sample error:',as.character(1-confmatrix$overall['Accuracy'])))
+```
+
+# Model application - prediction of activity type based on new parameters
+
+We choose Random Forest for now, since it had higher prediction accuracy on its test data set (GBM was also quite close, and both models were quite strong predictors for their test data. Furter options would include combining these two models but it is perhaps not necessary here)
+```{r}
+test.prediction <- predict(rfmodel, newdata=testing)
+# predictions:
+test.prediction
+```
